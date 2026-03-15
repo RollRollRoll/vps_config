@@ -611,10 +611,10 @@ do_system_update() {
 }
 
 # ============================================================
-#  3) 安装哈探针 (Nezha Agent)
+#  3) 安装Nezha探针 (Nezha Agent)
 # ============================================================
 do_nezha_install() {
-  echo -e "${C_CYAN}=== 安装哈探针 (Nezha Agent) ===${C_RESET}"
+  echo -e "${C_CYAN}=== 安装Nezha探针 (Nezha Agent) ===${C_RESET}"
   echo ""
   echo "请粘贴完整的安装命令（包含 NZ_SERVER、NZ_CLIENT_SECRET 等参数）："
   echo -e "${C_GRAY}示例: curl -L https://raw.githubusercontent.com/nezhahq/scripts/main/agent/install.sh -o agent.sh && chmod +x agent.sh && env NZ_SERVER=... NZ_TLS=true NZ_CLIENT_SECRET=... NZ_UUID=... ./agent.sh${C_RESET}"
@@ -725,7 +725,7 @@ show_menu() {
   echo -e "${C_CYAN}=========================================${C_RESET}"
   echo " 1) SSH 安全加固"
   echo " 2) 系统更新"
-  echo " 3) 安装哈探针 (Nezha Agent)"
+  echo " 3) 安装Nezha探针 (Nezha Agent)"
   echo " 4) 服务器质量检测 (NodeQuality)"
   echo " 5) Snell 安装"
   echo " 6) Cloudflare 测速"
