@@ -698,7 +698,46 @@ do_snell_install() {
 }
 
 # ============================================================
-#  6) Cloudflare 测速
+#  6) 清理备份文件
+# ============================================================
+do_cleanup_backups() {
+  echo -e "\n${C_BOLD_WHITE}━━━━━━━━━━ 清理备份文件 ━━━━━━━━━━${C_RESET}\n"
+
+  local -a files=()
+  local f
+
+  # 收集 SSH 加固产生的备份文件
+  for f in /etc/ssh/sshd_config.bak.* /lib/systemd/system/ssh.socket.bak.*; do
+    [[ -f "$f" ]] 2>/dev/null && files+=("$f")
+  done
+
+  if [[ ${#files[@]} -eq 0 ]]; then
+    echo -e "  ${C_GREEN}✓ 未发现备份文件，无需清理${C_RESET}\n"
+    return 0
+  fi
+
+  echo -e "  ${C_CYAN}发现以下备份文件：${C_RESET}"
+  for f in "${files[@]}"; do
+    local size
+    size=$(du -h "$f" 2>/dev/null | cut -f1)
+    echo -e "    ${C_GRAY}${f}${C_RESET}  (${size})"
+  done
+
+  echo ""
+  read -rp "  确认删除以上 ${#files[@]} 个备份文件？[y/N]: " confirm
+  if [[ "${confirm,,}" != "y" ]]; then
+    echo -e "  ${C_YELLOW}● 已取消${C_RESET}\n"
+    return 0
+  fi
+
+  for f in "${files[@]}"; do
+    rm -f "$f"
+  done
+  echo -e "  ${C_GREEN}✓ 已删除 ${#files[@]} 个备份文件${C_RESET}\n"
+}
+
+# ============================================================
+#  7) Cloudflare 测速
 # ============================================================
 do_speedtest() {
   local tmpdir MEAS_ID RESULTS_FILE TIMESTAMP
@@ -764,7 +803,8 @@ show_menu() {
   echo " 3) 安装Nezha探针 (Nezha Agent)"
   echo " 4) 服务器质量检测 (NodeQuality)"
   echo " 5) Snell 安装"
-  echo " 6) Cloudflare 测速"
+  echo " 6) 清理备份文件"
+  echo " 7) Cloudflare 测速"
   echo " 0) 退出"
   echo -e "${C_CYAN}=========================================${C_RESET}"
 }
@@ -772,7 +812,7 @@ show_menu() {
 main() {
   while true; do
     show_menu
-    read -rp "请输入选项 [0-6]: " choice
+    read -rp "请输入选项 [0-7]: " choice
     echo ""
     case "$choice" in
       1) require_root && do_ssh_harden || true ;;
@@ -780,7 +820,8 @@ main() {
       3) require_root && do_nezha_install || true ;;
       4) do_node_quality || true ;;
       5) require_root && do_snell_install || true ;;
-      6) do_speedtest || true ;;
+      6) require_root && do_cleanup_backups || true ;;
+      7) do_speedtest || true ;;
       0) echo "再见！"; exit 0 ;;
       *) echo "无效选项，请重新输入" ;;
     esac
