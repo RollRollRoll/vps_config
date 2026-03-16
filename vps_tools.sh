@@ -868,12 +868,12 @@ _validate_port() {
 
 # 交互选择协议
 _ask_protocol() {
-  echo "   选择协议："
-  echo "     1) tcp"
-  echo "     2) udp"
-  echo "     3) tcp+udp (两者都开)"
+  echo "   选择协议：" >&2
+  echo "     1) tcp" >&2
+  echo "     2) udp" >&2
+  echo "     3) tcp+udp (两者都开)" >&2
   local proto_choice
-  read -rp "   请选择 [默认 3]: " proto_choice
+  read -rp "   请选择协议 [默认 3]: " proto_choice
   proto_choice="${proto_choice:-3}"
   case "$proto_choice" in
     1) echo "tcp" ;;
