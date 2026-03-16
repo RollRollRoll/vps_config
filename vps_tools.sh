@@ -652,6 +652,30 @@ do_system_update() {
 do_nezha_install() {
   echo -e "${C_CYAN}=== 安装Nezha探针 (Nezha Agent) ===${C_RESET}"
   echo ""
+
+  # 检查并安装 unzip（探针安装脚本依赖 unzip）
+  if ! command -v unzip &>/dev/null; then
+    echo -e "${C_YELLOW}未检测到 unzip，正在自动安装...${C_RESET}"
+    if command -v apt-get &>/dev/null; then
+      apt-get update -qq && apt-get install -y -qq unzip
+    elif command -v yum &>/dev/null; then
+      yum install -y unzip
+    elif command -v dnf &>/dev/null; then
+      dnf install -y unzip
+    elif command -v apk &>/dev/null; then
+      apk add unzip
+    else
+      echo -e "${C_RED}无法自动安装 unzip，请手动安装后重试${C_RESET}"
+      return 1
+    fi
+    if command -v unzip &>/dev/null; then
+      echo -e "${C_GREEN}unzip 安装成功${C_RESET}"
+    else
+      echo -e "${C_RED}unzip 安装失败，请手动安装后重试${C_RESET}"
+      return 1
+    fi
+  fi
+
   echo "请粘贴完整的安装命令（包含 NZ_SERVER、NZ_CLIENT_SECRET 等参数）："
   echo -e "${C_GRAY}示例: curl -L https://raw.githubusercontent.com/nezhahq/scripts/main/agent/install.sh -o agent.sh && chmod +x agent.sh && env NZ_SERVER=... NZ_TLS=true NZ_CLIENT_SECRET=... NZ_UUID=... ./agent.sh${C_RESET}"
   echo ""
