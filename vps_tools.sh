@@ -1306,10 +1306,18 @@ NFTCONF
 _nft_load_rules() {
   NFT_RULES=()
   [[ ! -f "$NFT_CONF_FILE" ]] && return
+  local _comment=""
   while IFS= read -r line; do
-    [[ "$line" =~ ^[[:space:]]*# ]] && continue
+    if [[ "$line" =~ ^[[:space:]]*#.*\|\ *备注:\ *(.*) ]]; then
+      _comment="${BASH_REMATCH[1]}"
+      continue
+    elif [[ "$line" =~ ^[[:space:]]*# ]]; then
+      _comment=""
+      continue
+    fi
     if [[ "$line" =~ tcp\ dport\ ([0-9]+)\ dnat\ to\ ([0-9.]+):([0-9]+) ]]; then
-      NFT_RULES+=("${BASH_REMATCH[1]}|${BASH_REMATCH[2]}|${BASH_REMATCH[3]}")
+      NFT_RULES+=("${BASH_REMATCH[1]}|${BASH_REMATCH[2]}|${BASH_REMATCH[3]}|${_comment}")
+      _comment=""
     fi
   done < "$NFT_CONF_FILE"
 }
@@ -1339,12 +1347,17 @@ table ip ${NFT_TABLE_NAME} {
     chain prerouting {
         type nat hook prerouting priority -100; policy accept;
 EOF
-  local rule lport dip dport
+  local rule lport dip dport comment comment_suffix
   for rule in "${NFT_RULES[@]}"; do
-    IFS='|' read -r lport dip dport <<< "$rule"
+    IFS='|' read -r lport dip dport comment <<< "$rule"
+    if [[ -n "$comment" ]]; then
+      comment_suffix=" | 备注: ${comment}"
+    else
+      comment_suffix=""
+    fi
     cat >> "$tmp_file" <<EOF
 
-        # 转发: 本机:${lport} -> ${dip}:${dport}
+        # 转发: 本机:${lport} -> ${dip}:${dport}${comment_suffix}
         tcp dport ${lport} dnat to ${dip}:${dport}
         udp dport ${lport} dnat to ${dip}:${dport}
 EOF
@@ -1357,10 +1370,15 @@ EOF
         type nat hook postrouting priority 100; policy accept;
 EOF
   for rule in "${NFT_RULES[@]}"; do
-    IFS='|' read -r lport dip dport <<< "$rule"
+    IFS='|' read -r lport dip dport comment <<< "$rule"
+    if [[ -n "$comment" ]]; then
+      comment_suffix=" | 备注: ${comment}"
+    else
+      comment_suffix=""
+    fi
     cat >> "$tmp_file" <<EOF
 
-        # 回源: 发往 ${dip}:${dport} 的已 DNAT 流量, SNAT 为本机 IP
+        # 回源: 发往 ${dip}:${dport} 的已 DNAT 流量, SNAT 为本机 IP${comment_suffix}
         ip daddr ${dip} tcp dport ${dport} ct status dnat snat to \$LOCAL_IP
         ip daddr ${dip} udp dport ${dport} ct status dnat snat to \$LOCAL_IP
 EOF
@@ -1540,12 +1558,12 @@ _nft_do_list() {
     echo -e "${C_GREEN}[信息]${C_RESET} 当前没有端口转发规则。"
     return
   fi
-  printf "\n\033[1m%-6s %-10s %-10s    %-22s\033[0m\n" "序号" "协议" "本机端口" "目标地址"
-  echo "──────────────────────────────────────────────────────"
-  local idx=1 rule lport dip dport
+  printf "\n\033[1m%-6s %-10s %-10s    %-22s  %s\033[0m\n" "序号" "协议" "本机端口" "目标地址" "备注"
+  echo "──────────────────────────────────────────────────────────────────"
+  local idx=1 rule lport dip dport comment
   for rule in "${NFT_RULES[@]}"; do
-    IFS='|' read -r lport dip dport <<< "$rule"
-    printf "%-6s %-10s %-10s -> %-22s\n" "$idx" "tcp+udp" "$lport" "${dip}:${dport}"
+    IFS='|' read -r lport dip dport comment <<< "$rule"
+    printf "%-6s %-10s %-10s -> %-22s  %s\n" "$idx" "tcp+udp" "$lport" "${dip}:${dport}" "$comment"
     ((idx++))
   done
   echo ""
@@ -1608,19 +1626,24 @@ _nft_do_add() {
     if _nft_validate_port "$dport"; then break; fi
     echo -e "${C_RED}[错误]${C_RESET} 端口无效，请输入 1-65535 之间的数字。"
   done
+  local comment
+  read -rp "请输入备注（可选，直接回车跳过）: " comment
+  # 备注中不允许包含管道符，避免破坏分隔格式
+  comment="${comment//|/}"
   echo ""
   echo "即将添加转发规则:"
   echo "  本机端口 ${lport} (tcp+udp) → ${dip}:${dport}"
+  [[ -n "$comment" ]] && echo "  备注: ${comment}"
   read -rp "确认添加？[Y/n]: " confirm
   if [[ "$confirm" =~ ^[Nn]$ ]]; then
     echo -e "${C_GREEN}[信息]${C_RESET} 已取消。"
     return
   fi
-  NFT_RULES+=("${lport}|${dip}|${dport}")
+  NFT_RULES+=("${lport}|${dip}|${dport}|${comment}")
   if ! _nft_save_and_reload; then return; fi
   _nft_firewall_port open "$lport" "$dip" "$dport"
   echo -e "${C_GREEN}[信息]${C_RESET} 转发规则添加成功: ${lport} → ${dip}:${dport}"
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] 新增转发: ${lport} -> ${dip}:${dport}" >> "$NFT_LOG_FILE" 2>/dev/null || true
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] 新增转发: ${lport} -> ${dip}:${dport}${comment:+ (${comment})}" >> "$NFT_LOG_FILE" 2>/dev/null || true
   echo -e "${C_GREEN}[信息]${C_RESET} 若转发不通，请使用菜单中的【诊断/自检】排查。"
 }
 
@@ -1635,12 +1658,12 @@ _nft_do_delete() {
     echo -e "${C_GREEN}[信息]${C_RESET} 当前没有端口转发规则，无需删除。"
     return
   fi
-  printf "\n\033[1m%-6s %-10s %-10s    %-20s\033[0m\n" "序号" "协议" "本机端口" "目标地址"
-  echo "────────────────────────────────────────────────────"
-  local idx=1 rule lport dip dport
+  printf "\n\033[1m%-6s %-10s %-10s    %-22s  %s\033[0m\n" "序号" "协议" "本机端口" "目标地址" "备注"
+  echo "──────────────────────────────────────────────────────────────────"
+  local idx=1 rule lport dip dport comment
   for rule in "${NFT_RULES[@]}"; do
-    IFS='|' read -r lport dip dport <<< "$rule"
-    printf "%-6s %-10s %-10s -> %-20s\n" "$idx" "tcp+udp" "$lport" "${dip}:${dport}"
+    IFS='|' read -r lport dip dport comment <<< "$rule"
+    printf "%-6s %-10s %-10s -> %-22s  %s\n" "$idx" "tcp+udp" "$lport" "${dip}:${dport}" "$comment"
     ((idx++))
   done
   echo ""
@@ -1655,9 +1678,10 @@ _nft_do_delete() {
     return
   fi
   local target="${NFT_RULES[$((choice-1))]}"
-  IFS='|' read -r lport dip dport <<< "$target"
+  IFS='|' read -r lport dip dport comment <<< "$target"
   echo "即将删除转发规则:"
   echo "  本机端口 ${lport} (tcp+udp) → ${dip}:${dport}"
+  [[ -n "$comment" ]] && echo "  备注: ${comment}"
   read -rp "确认删除？[Y/n]: " confirm
   if [[ "$confirm" =~ ^[Nn]$ ]]; then
     echo -e "${C_GREEN}[信息]${C_RESET} 已取消。"
@@ -1668,7 +1692,7 @@ _nft_do_delete() {
   if ! _nft_save_and_reload; then return; fi
   _nft_firewall_port close "$lport" "$dip" "$dport"
   echo -e "${C_GREEN}[信息]${C_RESET} 转发规则已删除: ${lport} → ${dip}:${dport}"
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] 删除转发: ${lport} -> ${dip}:${dport}" >> "$NFT_LOG_FILE" 2>/dev/null || true
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] 删除转发: ${lport} -> ${dip}:${dport}${comment:+ (${comment})}" >> "$NFT_LOG_FILE" 2>/dev/null || true
 }
 
 _nft_do_clear_all() {
@@ -1688,15 +1712,64 @@ _nft_do_clear_all() {
     echo -e "${C_GREEN}[信息]${C_RESET} 已取消。"
     return
   fi
-  local rule lport dip dport
+  local rule lport dip dport comment
   for rule in "${NFT_RULES[@]}"; do
-    IFS='|' read -r lport dip dport <<< "$rule"
+    IFS='|' read -r lport dip dport comment <<< "$rule"
     _nft_firewall_port close "$lport" "$dip" "$dport" "force"
   done
   NFT_RULES=()
   if ! _nft_save_and_reload; then return; fi
   echo -e "${C_GREEN}[信息]${C_RESET} 所有转发规则已清空。"
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] 清空所有转发规则" >> "$NFT_LOG_FILE" 2>/dev/null || true
+}
+
+_nft_do_edit_comment() {
+  echo ""
+  if ! command -v nft &>/dev/null; then
+    echo -e "${C_RED}[错误]${C_RESET} nftables 未安装，请先选择 [1] 安装。"
+    return
+  fi
+  _nft_load_rules
+  if [[ ${#NFT_RULES[@]} -eq 0 ]]; then
+    echo -e "${C_GREEN}[信息]${C_RESET} 当前没有端口转发规则。"
+    return
+  fi
+  printf "\n\033[1m%-6s %-10s %-10s    %-22s  %s\033[0m\n" "序号" "协议" "本机端口" "目标地址" "备注"
+  echo "──────────────────────────────────────────────────────────────────"
+  local idx=1 rule lport dip dport comment
+  for rule in "${NFT_RULES[@]}"; do
+    IFS='|' read -r lport dip dport comment <<< "$rule"
+    printf "%-6s %-10s %-10s -> %-22s  %s\n" "$idx" "tcp+udp" "$lport" "${dip}:${dport}" "$comment"
+    ((idx++))
+  done
+  echo ""
+  local choice
+  read -rp "请输入要修改备注的序号 (0 取消): " choice
+  if [[ "$choice" == "0" ]] || [[ -z "$choice" ]]; then
+    echo -e "${C_GREEN}[信息]${C_RESET} 已取消。"
+    return
+  fi
+  if [[ ! "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#NFT_RULES[@]} )); then
+    echo -e "${C_RED}[错误]${C_RESET} 无效的序号。"
+    return
+  fi
+  local target="${NFT_RULES[$((choice-1))]}"
+  IFS='|' read -r lport dip dport comment <<< "$target"
+  if [[ -n "$comment" ]]; then
+    echo "当前备注: ${comment}"
+  else
+    echo "当前无备注"
+  fi
+  local new_comment
+  read -rp "请输入新备注（留空则清除备注）: " new_comment
+  new_comment="${new_comment//|/}"
+  NFT_RULES[$((choice-1))]="${lport}|${dip}|${dport}|${new_comment}"
+  if ! _nft_save_and_reload; then return; fi
+  if [[ -n "$new_comment" ]]; then
+    echo -e "${C_GREEN}[信息]${C_RESET} 备注已更新: ${lport} → ${dip}:${dport} (${new_comment})"
+  else
+    echo -e "${C_GREEN}[信息]${C_RESET} 备注已清除: ${lport} → ${dip}:${dport}"
+  fi
 }
 
 _nft_do_diagnose() {
@@ -1801,9 +1874,9 @@ _nft_do_diagnose() {
   if [[ ${#NFT_RULES[@]} -gt 0 ]]; then
     read -rp "是否测试目标连通性？[y/N]: " test_conn
     if [[ "$test_conn" =~ ^[Yy]$ ]]; then
-      local rule lport dip dport
+      local rule lport dip dport comment
       for rule in "${NFT_RULES[@]}"; do
-        IFS='|' read -r lport dip dport <<< "$rule"
+        IFS='|' read -r lport dip dport comment <<< "$rule"
         printf "  测试 %s:%s (TCP) ... " "$dip" "$dport"
         if timeout 3 bash -c ">/dev/tcp/${dip}/${dport}" 2>/dev/null; then
           printf "${C_GREEN}通${C_RESET}\n"
@@ -1823,21 +1896,23 @@ do_nft_forward() {
     echo " 2) 查看现有端口转发"
     echo " 3) 新增端口转发"
     echo " 4) 删除端口转发"
-    echo " 5) 一键清空所有转发"
-    echo " 6) 诊断/自检"
+    echo " 5) 修改规则备注"
+    echo " 6) 一键清空所有转发"
+    echo " 7) 诊断/自检"
     echo " 0) 返回主菜单"
     echo ""
     local nft_choice
-    read -rp "请选择操作 [0-6]: " nft_choice
+    read -rp "请选择操作 [0-7]: " nft_choice
     case "$nft_choice" in
       1) _nft_do_install ;;
       2) _nft_do_list ;;
       3) _nft_do_add ;;
       4) _nft_do_delete ;;
-      5) _nft_do_clear_all ;;
-      6) _nft_do_diagnose ;;
+      5) _nft_do_edit_comment ;;
+      6) _nft_do_clear_all ;;
+      7) _nft_do_diagnose ;;
       0) return 0 ;;
-      *) echo -e "${C_RED}[错误]${C_RESET} 无效选择，请输入 0-6。" ;;
+      *) echo -e "${C_RED}[错误]${C_RESET} 无效选择，请输入 0-7。" ;;
     esac
   done
 }
