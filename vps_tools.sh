@@ -1576,6 +1576,18 @@ _nft_do_install() {
   echo -e "${C_GREEN}[信息]${C_RESET} 安装与初始化完成。"
 }
 
+_nft_get_ufw_src_for_port() {
+  local lport="$1" ufw_rules="$2"
+  local sources
+  sources=$(echo "$ufw_rules" | grep -E "^${lport}(/[a-z]+)?[[:space:]]+ALLOW IN" | awk '{print $NF}' | sort -u)
+  if [[ -z "$sources" ]]; then
+    echo "-"
+  else
+    sources="${sources//Anywhere/any}"
+    echo "$sources" | tr '\n' ',' | sed 's/,$//'
+  fi
+}
+
 _nft_do_list() {
   echo ""
   _nft_load_rules
@@ -1583,12 +1595,24 @@ _nft_do_list() {
     echo -e "${C_GREEN}[信息]${C_RESET} 当前没有端口转发规则。"
     return
   fi
+  # 检测 UFW 是否激活，提前获取规则
+  local ufw_active=false ufw_rules=""
+  if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -qw "active"; then
+    ufw_active=true
+    ufw_rules=$(ufw status 2>/dev/null | tail -n +5 | grep -v '(v6)' || true)
+  fi
   printf "\n\033[1m%-6s %-10s %-10s    %-22s  %-18s  %s\033[0m\n" "序号" "协议" "本机端口" "目标地址" "来源限制" "备注"
   echo "──────────────────────────────────────────────────────────────────────────────────────"
   local idx=1 rule lport dip dport comment src_ip
   for rule in "${NFT_RULES[@]}"; do
     IFS='|' read -r lport dip dport comment src_ip <<< "$rule"
-    printf "%-6s %-10s %-10s -> %-22s  %-18s  %s\n" "$idx" "tcp+udp" "$lport" "${dip}:${dport}" "${src_ip:-any}" "$comment"
+    local display_src="${src_ip:-any}"
+    if $ufw_active; then
+      local ufw_src
+      ufw_src=$(_nft_get_ufw_src_for_port "$lport" "$ufw_rules")
+      [[ "$ufw_src" != "-" ]] && display_src="$ufw_src"
+    fi
+    printf "%-6s %-10s %-10s -> %-22s  %-18s  %s\n" "$idx" "tcp+udp" "$lport" "${dip}:${dport}" "$display_src" "$comment"
     ((idx++))
   done
   echo ""
