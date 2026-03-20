@@ -1385,8 +1385,8 @@ EOF
     cat >> "$tmp_file" <<EOF
 
         # 转发: 本机:${lport} -> ${dip}:${dport}${comment_suffix}
-        tcp dport ${lport} dnat to ${dip}:${dport}
-        udp dport ${lport} dnat to ${dip}:${dport}
+        ${src_ip:+ip saddr ${src_ip} }tcp dport ${lport} dnat to ${dip}:${dport}
+        ${src_ip:+ip saddr ${src_ip} }udp dport ${lport} dnat to ${dip}:${dport}
 EOF
   done
   cat >> "$tmp_file" <<EOF
@@ -1655,25 +1655,22 @@ _nft_do_add() {
   read -rp "请输入备注（可选，直接回车跳过）: " comment
   # 备注中不允许包含管道符，避免破坏分隔格式
   comment="${comment//|/}"
-  # 当 UFW 处于活跃状态时，询问是否限制来源 IP
+  # 询问是否限制转发来源 IP
   local src_ip=""
-  if command -v ufw &>/dev/null && ufw status 2>/dev/null | grep -qw "active"; then
-    echo ""
-    echo "检测到 UFW 防火墙处于活跃状态。"
-    echo "来源 IP 限制（留空表示允许所有来源）："
-    echo "  支持单个 IP (如 1.2.3.4) 或 CIDR 网段 (如 10.0.0.0/8)"
-    read -rp "请输入来源 IP [默认 any]: " src_ip
-    src_ip="${src_ip// /}"
-    if [[ -n "$src_ip" ]] && ! _validate_ip_or_cidr "$src_ip"; then
-      echo -e "${C_RED}[错误]${C_RESET} IP 地址/网段格式无效，将不限制来源。"
-      src_ip=""
-    fi
+  echo ""
+  echo "是否限制转发来源 IP？（留空表示允许所有来源）"
+  echo "  支持单个 IP (如 1.2.3.4) 或 CIDR 网段 (如 10.0.0.0/8)"
+  read -rp "请输入来源 IP [默认 any]: " src_ip
+  src_ip="${src_ip// /}"
+  if [[ -n "$src_ip" ]] && ! _validate_ip_or_cidr "$src_ip"; then
+    echo -e "${C_RED}[错误]${C_RESET} IP 地址/网段格式无效，将不限制来源。"
+    src_ip=""
   fi
   echo ""
   echo "即将添加转发规则:"
   echo "  本机端口 ${lport} (tcp+udp) → ${dip}:${dport}"
   [[ -n "$comment" ]] && echo "  备注: ${comment}"
-  [[ -n "$src_ip" ]] && echo "  UFW 来源限制: ${src_ip}"
+  [[ -n "$src_ip" ]] && echo "  来源限制: ${src_ip}"
   read -rp "确认添加？[Y/n]: " confirm
   if [[ "$confirm" =~ ^[Nn]$ ]]; then
     echo -e "${C_GREEN}[信息]${C_RESET} 已取消。"
@@ -1930,6 +1927,238 @@ _nft_do_diagnose() {
   echo ""
 }
 
+# --- 导出规则 ---
+_export_rules() {
+  local default_file="/root/vps-rules-$(hostname)-$(date '+%Y%m%d%H%M%S').conf"
+  local export_file
+  read -rp "导出文件路径 [默认: ${default_file}]: " export_file
+  export_file="${export_file:-$default_file}"
+
+  # 确保目标目录存在
+  local export_dir
+  export_dir="$(dirname "$export_file")"
+  if [[ ! -d "$export_dir" ]]; then
+    echo -e "${C_RED}[错误]${C_RESET} 目录不存在: ${export_dir}"
+    return 1
+  fi
+
+  {
+    echo "# VPS Tools 规则导出"
+    echo "# 导出时间: $(date '+%Y-%m-%d %H:%M:%S')"
+    echo "# 主机名: $(hostname)"
+    echo ""
+
+    # 导出 nftables 转发规则
+    echo "[nftables]"
+    echo "# 格式: 本机端口|目标IP|目标端口|备注|来源IP限制"
+    if command -v nft &>/dev/null && [[ -f "$NFT_CONF_FILE" ]]; then
+      _nft_load_rules
+      for rule in "${NFT_RULES[@]}"; do
+        echo "$rule"
+      done
+    fi
+    echo ""
+
+    # 导出 UFW 规则
+    echo "[ufw]"
+    echo "# 格式: ufw 命令（可直接执行恢复）"
+    if command -v ufw &>/dev/null; then
+      # ufw show added 输出可直接回放的命令
+      ufw show added 2>/dev/null | grep "^ufw " | grep -v "^ufw logging" || true
+    fi
+  } > "$export_file"
+
+  echo ""
+  echo -e "${C_GREEN}[信息]${C_RESET} 规则已导出到: ${export_file}"
+  echo ""
+
+  # 统计并显示
+  local nft_count ufw_count
+  nft_count=$(grep -c "^[0-9]" "$export_file" 2>/dev/null || echo 0)
+  ufw_count=$(grep -c "^ufw " "$export_file" 2>/dev/null || echo 0)
+  echo "  nftables 转发规则: ${nft_count} 条"
+  echo "  UFW 规则: ${ufw_count} 条"
+  echo ""
+  echo "文件内容预览:"
+  echo "─────────────────────────────────────"
+  cat "$export_file"
+  echo "─────────────────────────────────────"
+}
+
+# --- 导入规则 ---
+_import_rules() {
+  local import_file
+  read -rp "导入文件路径: " import_file
+
+  if [[ ! -f "$import_file" ]]; then
+    echo -e "${C_RED}[错误]${C_RESET} 文件不存在: ${import_file}"
+    return 1
+  fi
+
+  # 解析文件内容
+  local section="" line
+  local -a nft_import_rules=()
+  local -a ufw_import_cmds=()
+
+  while IFS= read -r line; do
+    # 跳过注释和空行
+    [[ "$line" =~ ^[[:space:]]*# ]] && continue
+    [[ -z "$line" ]] && continue
+
+    if [[ "$line" == "[nftables]" ]]; then
+      section="nftables"; continue
+    elif [[ "$line" == "[ufw]" ]]; then
+      section="ufw"; continue
+    fi
+
+    case "$section" in
+      nftables) nft_import_rules+=("$line") ;;
+      ufw)      ufw_import_cmds+=("$line") ;;
+    esac
+  done < "$import_file"
+
+  local nft_count=${#nft_import_rules[@]}
+  local ufw_count=${#ufw_import_cmds[@]}
+
+  if [[ $nft_count -eq 0 && $ufw_count -eq 0 ]]; then
+    echo -e "${C_YELLOW}[警告]${C_RESET} 文件中没有可导入的规则。"
+    return
+  fi
+
+  # 显示即将导入的内容
+  echo ""
+  echo "即将导入以下规则:"
+  echo ""
+
+  if [[ $nft_count -gt 0 ]]; then
+    echo -e "  ${C_CYAN}nftables 转发规则 (${nft_count} 条):${C_RESET}"
+    local rule lport dip dport comment src_ip
+    for rule in "${nft_import_rules[@]}"; do
+      IFS='|' read -r lport dip dport comment src_ip <<< "$rule"
+      printf "    %-8s → %-22s" "$lport" "${dip}:${dport}"
+      [[ -n "$src_ip" ]] && printf "  [来源: %s]" "$src_ip"
+      [[ -n "$comment" ]] && printf "  (%s)" "$comment"
+      echo ""
+    done
+    echo ""
+  fi
+
+  if [[ $ufw_count -gt 0 ]]; then
+    echo -e "  ${C_CYAN}UFW 规则 (${ufw_count} 条):${C_RESET}"
+    for cmd in "${ufw_import_cmds[@]}"; do
+      echo "    ${cmd}"
+    done
+    echo ""
+  fi
+
+  read -rp "确认导入？[Y/n]: " confirm
+  if [[ "$confirm" =~ ^[Nn]$ ]]; then
+    echo -e "${C_GREEN}[信息]${C_RESET} 已取消。"
+    return
+  fi
+
+  # ---- 导入 nftables 转发规则 ----
+  if [[ $nft_count -gt 0 ]]; then
+    echo ""
+    echo -e "${C_CYAN}--- 导入 nftables 转发规则 ---${C_RESET}"
+    if ! command -v nft &>/dev/null; then
+      echo -e "${C_RED}[错误]${C_RESET} nftables 未安装，请先选择菜单【安装 nftables】。"
+    else
+      _nft_init_conf
+      _nft_setup_kernel
+      _nft_load_rules
+
+      local added=0
+      for rule in "${nft_import_rules[@]}"; do
+        IFS='|' read -r lport dip dport comment src_ip <<< "$rule"
+
+        # 检查端口是否重复
+        local dup=0
+        for existing in "${NFT_RULES[@]}"; do
+          local elport
+          IFS='|' read -r elport _ _ _ _ <<< "$existing"
+          if [[ "$elport" == "$lport" ]]; then
+            echo -e "${C_YELLOW}[跳过]${C_RESET} 端口 ${lport} 已存在转发规则"
+            dup=1
+            break
+          fi
+        done
+
+        if [[ $dup -eq 0 ]]; then
+          NFT_RULES+=("${rule}")
+          echo -e "${C_GREEN}[添加]${C_RESET} ${lport} → ${dip}:${dport}${src_ip:+ [来源: ${src_ip}]}"
+          ((added++))
+        fi
+      done
+
+      if [[ $added -gt 0 ]]; then
+        if _nft_save_and_reload; then
+          # 为所有导入的规则开放防火墙端口（已存在的会被防火墙自动跳过）
+          for rule in "${nft_import_rules[@]}"; do
+            IFS='|' read -r lport dip dport comment src_ip <<< "$rule"
+            _nft_firewall_port open "$lport" "$dip" "$dport" "$src_ip"
+          done
+          echo -e "${C_GREEN}[信息]${C_RESET} nftables 转发规则导入完成 (新增 ${added} 条)"
+        fi
+      else
+        echo -e "${C_GREEN}[信息]${C_RESET} 没有新增的 nftables 规则（全部已存在）"
+      fi
+    fi
+  fi
+
+  # ---- 导入 UFW 规则 ----
+  if [[ $ufw_count -gt 0 ]]; then
+    echo ""
+    echo -e "${C_CYAN}--- 导入 UFW 规则 ---${C_RESET}"
+    if ! command -v ufw &>/dev/null; then
+      echo -e "${C_RED}[错误]${C_RESET} UFW 未安装，请先安装。"
+    else
+      local ufw_added=0 ufw_skipped=0
+      for cmd in "${ufw_import_cmds[@]}"; do
+        # 安全检查：只执行以 "ufw " 开头的命令
+        if [[ ! "$cmd" =~ ^ufw\ (allow|deny|reject|limit|route) ]]; then
+          echo -e "${C_YELLOW}[跳过]${C_RESET} 非法命令: ${cmd}"
+          ((ufw_skipped++))
+          continue
+        fi
+        # 执行并检查是否为已存在规则
+        local output
+        output=$(eval "$cmd" 2>&1) || true
+        if [[ "$output" == *"Skipping"* || "$output" == *"existing"* ]]; then
+          echo -e "${C_YELLOW}[跳过]${C_RESET} 已存在: ${cmd}"
+          ((ufw_skipped++))
+        else
+          echo -e "${C_GREEN}[添加]${C_RESET} ${cmd}"
+          ((ufw_added++))
+        fi
+      done
+      echo -e "${C_GREEN}[信息]${C_RESET} UFW 规则导入完成 (新增 ${ufw_added} 条, 跳过 ${ufw_skipped} 条)"
+    fi
+  fi
+
+  echo ""
+  echo -e "${C_GREEN}[信息]${C_RESET} 全部规则导入完成。"
+}
+
+# --- 导出/导入菜单 ---
+_nft_do_export_import() {
+  while true; do
+    echo -e "\n${C_BOLD_WHITE}━━━━━━━━━━ 导出/导入规则配置 ━━━━━━━━━━${C_RESET}\n"
+    echo " 1) 导出当前规则 (nftables + UFW)"
+    echo " 2) 从文件导入规则"
+    echo " 0) 返回上级菜单"
+    echo ""
+    local ei_choice
+    read -rp "请选择操作 [0-2]: " ei_choice
+    case "$ei_choice" in
+      1) _export_rules ;;
+      2) _import_rules ;;
+      0) return 0 ;;
+      *) echo -e "${C_RED}[错误]${C_RESET} 无效选择。" ;;
+    esac
+  done
+}
+
 do_nft_forward() {
   while true; do
     echo -e "\n${C_BOLD_WHITE}━━━━━━━━━━ 端口转发 (nftables) ━━━━━━━━━━${C_RESET}\n"
@@ -1940,10 +2169,11 @@ do_nft_forward() {
     echo " 5) 修改规则备注"
     echo " 6) 一键清空所有转发"
     echo " 7) 诊断/自检"
+    echo " 8) 导出/导入规则配置"
     echo " 0) 返回主菜单"
     echo ""
     local nft_choice
-    read -rp "请选择操作 [0-7]: " nft_choice
+    read -rp "请选择操作 [0-8]: " nft_choice
     case "$nft_choice" in
       1) _nft_do_install ;;
       2) _nft_do_list ;;
@@ -1952,8 +2182,9 @@ do_nft_forward() {
       5) _nft_do_edit_comment ;;
       6) _nft_do_clear_all ;;
       7) _nft_do_diagnose ;;
+      8) _nft_do_export_import ;;
       0) return 0 ;;
-      *) echo -e "${C_RED}[错误]${C_RESET} 无效选择，请输入 0-7。" ;;
+      *) echo -e "${C_RED}[错误]${C_RESET} 无效选择，请输入 0-8。" ;;
     esac
   done
 }
