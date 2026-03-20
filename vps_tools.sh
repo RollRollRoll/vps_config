@@ -1601,7 +1601,7 @@ _nft_do_list() {
     ufw_active=true
     ufw_rules=$(ufw status 2>/dev/null | tail -n +5 | grep -v '(v6)' || true)
   fi
-  printf "\n\033[1m%-6s %-10s %-10s    %-22s  %-18s  %s\033[0m\n" "序号" "协议" "本机端口" "目标地址" "来源限制" "备注"
+  printf "\n\033[1m%-8s %-12s %-14s    %-26s  %-22s  %s\033[0m\n" "序号" "协议" "本机端口" "目标地址" "来源限制" "备注"
   echo "──────────────────────────────────────────────────────────────────────────────────────"
   local idx=1 rule lport dip dport comment src_ip
   for rule in "${NFT_RULES[@]}"; do
@@ -1719,7 +1719,7 @@ _nft_do_delete() {
     echo -e "${C_GREEN}[信息]${C_RESET} 当前没有端口转发规则，无需删除。"
     return
   fi
-  printf "\n\033[1m%-6s %-10s %-10s    %-22s  %-18s  %s\033[0m\n" "序号" "协议" "本机端口" "目标地址" "来源限制" "备注"
+  printf "\n\033[1m%-8s %-12s %-14s    %-26s  %-22s  %s\033[0m\n" "序号" "协议" "本机端口" "目标地址" "来源限制" "备注"
   echo "──────────────────────────────────────────────────────────────────────────────────────"
   local idx=1 rule lport dip dport comment src_ip
   for rule in "${NFT_RULES[@]}"; do
@@ -1796,7 +1796,7 @@ _nft_do_edit_comment() {
     echo -e "${C_GREEN}[信息]${C_RESET} 当前没有端口转发规则。"
     return
   fi
-  printf "\n\033[1m%-6s %-10s %-10s    %-22s  %-18s  %s\033[0m\n" "序号" "协议" "本机端口" "目标地址" "来源限制" "备注"
+  printf "\n\033[1m%-8s %-12s %-14s    %-26s  %-22s  %s\033[0m\n" "序号" "协议" "本机端口" "目标地址" "来源限制" "备注"
   echo "──────────────────────────────────────────────────────────────────────────────────────"
   local idx=1 rule lport dip dport comment src_ip
   for rule in "${NFT_RULES[@]}"; do
