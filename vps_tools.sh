@@ -576,6 +576,29 @@ do_ssh_harden() {
   grep -q "^PasswordAuthentication " "$sshd_config" || echo "PasswordAuthentication no" >> "$sshd_config"
   grep -q "^PermitRootLogin " "$sshd_config" || echo "PermitRootLogin prohibit-password" >> "$sshd_config"
 
+  # 处理 sshd_config.d/ 下可能覆盖主配置的文件（OpenSSH Include 使用 first-match-wins）
+  local sshd_config_d="/etc/ssh/sshd_config.d"
+  if [[ -d "$sshd_config_d" ]]; then
+    local conf_file
+    local found_override=false
+    for conf_file in "$sshd_config_d"/*.conf; do
+      [[ -f "$conf_file" ]] || continue
+      if grep -qE '^(Port|PubkeyAuthentication|PasswordAuthentication|PermitRootLogin) ' "$conf_file" 2>/dev/null; then
+        found_override=true
+        sed -i \
+          -e "s/^Port .*/Port ${new_port}/" \
+          -e "s/^PubkeyAuthentication .*/PubkeyAuthentication yes/" \
+          -e "s/^PasswordAuthentication .*/PasswordAuthentication no/" \
+          -e "s/^PermitRootLogin .*/PermitRootLogin prohibit-password/" \
+          "$conf_file"
+        echo -e "      ${C_YELLOW}⚠ 已同步修改 ${conf_file}${C_RESET}"
+      fi
+    done
+    if $found_override; then
+      echo -e "      ${C_YELLOW}  (sshd_config.d/ 下的配置会覆盖主配置，已确保一致)${C_RESET}"
+    fi
+  fi
+
   echo -e "      ${C_GREEN}✓ Port=${new_port}, 密钥登录, 禁用密码${C_RESET}\n"
 
   # --- [4/6] Ubuntu ssh.socket ---
@@ -830,7 +853,13 @@ do_speedtest() {
 # 获取当前 SSH 端口
 _get_ssh_port() {
   local port
-  port="$(grep -E '^Port ' /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' | head -n1)"
+  # 优先检查 sshd_config.d/（Include first-match-wins），再检查主配置
+  if [[ -d /etc/ssh/sshd_config.d ]]; then
+    port="$(grep -hE '^Port ' /etc/ssh/sshd_config.d/*.conf 2>/dev/null | head -n1 | awk '{print $2}')"
+  fi
+  if [[ -z "$port" ]]; then
+    port="$(grep -E '^Port ' /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' | head -n1)"
+  fi
   echo "${port:-22}"
 }
 
