@@ -2441,6 +2441,215 @@ do_change_hostname() {
 }
 
 # ============================================================
+#  11) 桌面环境与远程桌面
+# ============================================================
+_desktop_is_supported_os() {
+  local os_id="${1:-}"
+  [[ "$os_id" == "ubuntu" || "$os_id" == "debian" ]]
+}
+
+_desktop_validate_username() {
+  local username="${1:-}"
+
+  if [[ -z "$username" || "$username" == "root" ]]; then
+    return 1
+  fi
+
+  [[ "$username" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]
+}
+
+_desktop_get_os_id() {
+  local os_id=""
+
+  if [[ -r /etc/os-release ]]; then
+    os_id="$(
+      . /etc/os-release
+      printf '%s' "${ID:-}"
+    )"
+  fi
+
+  printf '%s\n' "$os_id"
+}
+
+_desktop_list_regular_users() {
+  awk -F: '($3 >= 1000) && $1 != "root" && $7 !~ /(nologin|false)$/ {print $1}' /etc/passwd || true
+}
+
+_desktop_user_exists() {
+  id -u "$1" >/dev/null 2>&1
+}
+
+_desktop_get_home_dir() {
+  getent passwd "$1" | cut -d: -f6
+}
+
+_desktop_pick_user() {
+  local username create_confirm users
+
+  users="$(_desktop_list_regular_users)"
+  echo -e "${C_CYAN}可用于远程桌面的普通用户：${C_RESET}" >&2
+  if [[ -n "$users" ]]; then
+    while IFS= read -r user; do
+      echo "  - ${user}" >&2
+    done <<< "$users"
+  else
+    echo "  - 当前未检测到可用普通用户，请输入新用户名创建" >&2
+  fi
+  echo "" >&2
+
+  while true; do
+    read -rp "请输入远程桌面用户名: " username >&2
+    username="${username// /}"
+
+    if ! _desktop_validate_username "$username"; then
+      echo -e "   ${C_RED}✗ 用户名无效，且不能使用 root${C_RESET}" >&2
+      continue
+    fi
+
+    if _desktop_user_exists "$username"; then
+      printf '%s\n' "$username"
+      return 0
+    fi
+
+    read -rp "用户 ${username} 不存在，是否现在创建？[y/N]: " create_confirm >&2
+    if [[ "${create_confirm,,}" != "y" ]]; then
+      echo -e "   ${C_YELLOW}● 已取消创建，请重新输入${C_RESET}" >&2
+      continue
+    fi
+
+    useradd -m -s /bin/bash "$username"
+    passwd "$username"
+    printf '%s\n' "$username"
+    return 0
+  done
+}
+
+_desktop_write_xsession() {
+  local username="$1"
+  local home_dir
+
+  home_dir="$(_desktop_get_home_dir "$username")"
+  if [[ -z "$home_dir" || ! -d "$home_dir" ]]; then
+    echo -e "   ${C_RED}✗ 无法确定用户 ${username} 的家目录${C_RESET}"
+    return 1
+  fi
+
+  printf 'startxfce4\n' > "${home_dir}/.xsession"
+  chown "${username}:${username}" "${home_dir}/.xsession"
+  chmod 644 "${home_dir}/.xsession"
+}
+
+_desktop_ufw_has_added_command() {
+  local expected="$1"
+  ufw show added 2>/dev/null | grep -Fqx "$expected"
+}
+
+_desktop_allow_xrdp_port() {
+  local source_ip="${1:-}"
+  local confirm_enable ssh_port
+
+  _ensure_ufw || return 1
+
+  if ufw status 2>/dev/null | grep -qw "active"; then
+    if [[ -n "$source_ip" ]]; then
+      if _desktop_ufw_has_added_command "ufw allow from ${source_ip} to any port 3389 proto tcp"; then
+        echo -e "   ${C_YELLOW}● 已存在 XRDP 来源限制规则，跳过重复添加${C_RESET}"
+      else
+        ufw allow from "$source_ip" to any port 3389 proto tcp >/dev/null 2>&1
+      fi
+    else
+      if _desktop_ufw_has_added_command "ufw allow 3389/tcp"; then
+        echo -e "   ${C_YELLOW}● 已存在 XRDP 放行规则，跳过重复添加${C_RESET}"
+      else
+        ufw allow 3389/tcp >/dev/null 2>&1
+      fi
+    fi
+    return 0
+  fi
+
+  read -rp "   检测到 ufw 未启用，是否现在启用？[y/N]: " confirm_enable
+  if [[ "${confirm_enable,,}" != "y" ]]; then
+    echo -e "   ${C_YELLOW}● 未启用 ufw，请确认云侧和本机策略允许访问 3389${C_RESET}"
+    return 0
+  fi
+
+  ssh_port="$(_get_ssh_port)"
+  if ! _desktop_ufw_has_added_command "ufw allow ${ssh_port}/tcp"; then
+    ufw allow "${ssh_port}/tcp" >/dev/null 2>&1
+  fi
+
+  if [[ -n "$source_ip" ]]; then
+    if ! _desktop_ufw_has_added_command "ufw allow from ${source_ip} to any port 3389 proto tcp"; then
+      ufw allow from "$source_ip" to any port 3389 proto tcp >/dev/null 2>&1
+    fi
+  else
+    if ! _desktop_ufw_has_added_command "ufw allow 3389/tcp"; then
+      ufw allow 3389/tcp >/dev/null 2>&1
+    fi
+  fi
+
+  ufw --force enable >/dev/null 2>&1
+}
+
+do_desktop_remote_setup() {
+  local os_id username limit_choice source_ip=""
+
+  echo -e "\n${C_BOLD_WHITE}━━━━━━━━━━ 安装桌面环境与远程桌面 ━━━━━━━━━━${C_RESET}\n"
+
+  echo -e "${C_CYAN}[1/6] 检查系统${C_RESET}"
+  os_id="$(_desktop_get_os_id)"
+  if ! _desktop_is_supported_os "$os_id"; then
+    echo -e "   ${C_RED}✗ 当前仅支持 Ubuntu / Debian${C_RESET}"
+    return 1
+  fi
+  echo -e "   ${C_GREEN}✓ 已确认系统为 ${os_id}${C_RESET}\n"
+
+  echo -e "${C_CYAN}[2/6] 安装 XFCE 与 XRDP${C_RESET}"
+  apt-get update
+  apt-get install -y xfce4 xfce4-goodies xrdp xorgxrdp
+  usermod -aG ssl-cert xrdp
+  echo -e "   ${C_GREEN}✓ 软件包安装完成${C_RESET}\n"
+
+  echo -e "${C_CYAN}[3/6] 配置远程桌面用户${C_RESET}"
+  username="$(_desktop_pick_user)"
+  echo -e "   ${C_GREEN}✓ 远程桌面用户: ${username}${C_RESET}\n"
+
+  echo -e "${C_CYAN}[4/6] 配置桌面会话${C_RESET}"
+  _desktop_write_xsession "$username" || return 1
+  echo -e "   ${C_GREEN}✓ 已为 ${username} 写入 XFCE 会话${C_RESET}\n"
+
+  echo -e "${C_CYAN}[5/6] 配置防火墙${C_RESET}"
+  read -rp "   是否限制 XRDP 来源 IP？[y/N]: " limit_choice
+  if [[ "${limit_choice,,}" == "y" ]]; then
+    read -rp "   请输入来源 IP 或 CIDR: " source_ip
+    source_ip="${source_ip// /}"
+    if ! _validate_ip_or_cidr "$source_ip"; then
+      echo -e "   ${C_RED}✗ 来源 IP 格式无效${C_RESET}"
+      return 1
+    fi
+  fi
+  _desktop_allow_xrdp_port "$source_ip" || return 1
+  echo -e "   ${C_GREEN}✓ XRDP 防火墙配置已处理${C_RESET}\n"
+
+  echo -e "${C_CYAN}[6/6] 启用并重启 XRDP${C_RESET}"
+  systemctl enable xrdp >/dev/null 2>&1
+  systemctl restart xrdp >/dev/null 2>&1
+  if ! systemctl is-active --quiet xrdp; then
+    echo -e "   ${C_RED}✗ xrdp 未成功启动，请检查: systemctl status xrdp / journalctl -u xrdp${C_RESET}"
+    return 1
+  fi
+  echo -e "   ${C_GREEN}✓ xrdp 已启用并启动${C_RESET}\n"
+
+  print_box \
+    "桌面环境: XFCE" \
+    "远程桌面端口: 3389" \
+    "登录用户: ${username}" \
+    "来源限制: ${source_ip:-所有来源}" \
+    "root 登录: 不支持" \
+    "连接方式: 使用 RDP 客户端连接 <服务器IP>:3389"
+}
+
+# ============================================================
 #  主菜单
 # ============================================================
 show_menu() {
@@ -2458,6 +2667,7 @@ show_menu() {
   echo " 8) 服务器质量检测 (NodeQuality)"
   echo " 9) Cloudflare 测速"
   echo " 10) 清理备份文件"
+  echo " 11) 安装桌面环境与远程桌面"
   echo " 0) 退出"
   echo -e "${C_CYAN}=========================================${C_RESET}"
 }
@@ -2465,7 +2675,7 @@ show_menu() {
 main() {
   while true; do
     show_menu
-    read -rp "请输入选项 [0-10]: " choice
+    read -rp "请输入选项 [0-11]: " choice
     echo ""
     case "$choice" in
       1) require_root && do_ssh_harden || true ;;
@@ -2478,10 +2688,13 @@ main() {
       8) do_node_quality || true ;;
       9) do_speedtest || true ;;
       10) require_root && do_cleanup_backups || true ;;
+      11) require_root && do_desktop_remote_setup || true ;;
       0) echo "再见！"; exit 0 ;;
       *) echo "无效选项，请重新输入" ;;
     esac
   done
 }
 
-main
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main
+fi
