@@ -2745,6 +2745,48 @@ do_desktop_remote_setup() {
 }
 
 # ============================================================
+#  12) SSH 客户端配置管理  — 辅助函数
+# ============================================================
+
+# 检查 config 文件中是否存在指定 Host 别名（精确匹配，不误匹配前缀）
+# 参数：config_file host
+_ssh_cfg_host_exists() {
+  local config_file="$1"
+  local host="$2"
+  [[ -f "$config_file" ]] || return 1
+  awk -v h="$host" '$1=="Host" && $2==h {found=1} END{exit !found}' "$config_file"
+}
+
+# 向 config 文件追加一个格式化的 Host 块
+# 参数：config_file host hostname user port key_path use_proxy(0|1)
+_ssh_cfg_write_block() {
+  local config_file="$1"
+  local host="$2"
+  local hostname="$3"
+  local user="$4"
+  local port="$5"
+  local key_path="$6"
+  local use_proxy="$7"
+
+  local ssh_dir
+  ssh_dir="$(dirname "$config_file")"
+  mkdir -p "$ssh_dir"
+  chmod 700 "$ssh_dir"
+  [[ ! -f "$config_file" ]] && { touch "$config_file"; chmod 600 "$config_file"; }
+
+  {
+    echo ""
+    echo "Host ${host}"
+    echo "    HostName ${hostname}"
+    echo "    User ${user}"
+    echo "    Port ${port}"
+    echo "    IdentitiesOnly yes"
+    echo "    IdentityFile ${key_path}"
+    if [[ "$use_proxy" == "1" ]]; then echo "    ProxyCommand nc -X 5 -x 127.0.0.1:6153 %h %p"; fi
+  } >> "$config_file"
+}
+
+# ============================================================
 #  主菜单
 # ============================================================
 show_menu() {
