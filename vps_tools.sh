@@ -2894,6 +2894,182 @@ _ssh_cfg_remove_host() {
   ' "$backup" > "$config_file"
 }
 
+# 交互式添加或覆盖一个 Host 条目
+# 参数：config_file
+_ssh_cfg_do_add() {
+  local config_file="$1"
+
+  echo -e "\n${C_BOLD_WHITE}━━━━━━━━━━ 添加 / 更新 Host ━━━━━━━━━━${C_RESET}\n"
+
+  # [1/6] Host 别名
+  local host
+  read -rp "      [1/6] Host 别名: " host
+  if [[ -z "$host" || "$host" =~ [[:space:]] ]]; then
+    echo -e "      ${C_RED}✗ Host 别名不能为空或含空格${C_RESET}"; return 1
+  fi
+
+  # 检查重复，确认覆盖
+  if _ssh_cfg_host_exists "$config_file" "$host"; then
+    local overwrite
+    read -rp "      ⚠ Host \"${host}\" 已存在，是否覆盖？[y/N]: " overwrite
+    if ! [[ "$overwrite" =~ ^[Yy]$ ]]; then
+      echo "      已取消"; return 0
+    fi
+    _ssh_cfg_remove_host "$config_file" "$host"
+    echo -e "      ${C_GREEN}✓ 已删除旧配置${C_RESET}"
+  fi
+
+  # [2/6] HostName
+  local hostname
+  read -rp "      [2/6] HostName (IP 或域名): " hostname
+  [[ -z "$hostname" ]] && { echo -e "      ${C_RED}✗ HostName 不能为空${C_RESET}"; return 1; }
+
+  # [3/6] User
+  local user
+  read -rp "      [3/6] User [默认 root]: " user
+  user="${user:-root}"
+
+  # [4/6] Port
+  local port
+  read -rp "      [4/6] Port [默认 22]: " port
+  port="${port:-22}"
+  if ! [[ "$port" =~ ^[0-9]+$ ]] || (( port < 1 || port > 65535 )); then
+    echo -e "      ${C_RED}✗ 端口无效，请输入 1-65535 之间的数字${C_RESET}"; return 1
+  fi
+
+  # [5/6] ProxyCommand
+  local use_proxy="0"
+  local proxy_ans
+  read -rp "      [5/6] 是否启用代理 (ProxyCommand nc -X 5 -x 127.0.0.1:6153)？[y/N]: " proxy_ans
+  if [[ "$proxy_ans" =~ ^[Yy]$ ]]; then use_proxy="1"; fi
+
+  # [6/6] IdentityFile
+  echo "      [6/6] IdentityFile 方式："
+  echo "            1) 生成新密钥对"
+  echo "            2) 提供私钥文件路径"
+  echo "            3) 粘贴密钥内容"
+  local key_choice
+  read -rp "      请选择 [1-3]: " key_choice
+
+  local default_key_path="$HOME/.ssh/${host}"
+  local key_path
+
+  case "$key_choice" in
+    1)
+      echo "      选择密钥类型："
+      echo "            1) ed25519（推荐）"
+      echo "            2) rsa-4096"
+      echo "            3) ecdsa-521"
+      local type_choice key_type
+      read -rp "      请选择 [1-3，默认 1]: " type_choice
+      case "${type_choice:-1}" in
+        1) key_type="ed25519" ;;
+        2) key_type="rsa" ;;
+        3) key_type="ecdsa" ;;
+        *) echo -e "      ${C_RED}✗ 无效选项${C_RESET}"; return 1 ;;
+      esac
+
+      read -rp "      保存路径 [默认 ${default_key_path}]: " key_path
+      key_path="${key_path:-$default_key_path}"
+
+      local passphrase="" pass_ans
+      read -rp "      是否设置密钥密码？[y/N]: " pass_ans
+      if [[ "$pass_ans" =~ ^[Yy]$ ]]; then
+        read -rsp "      请输入密码: " passphrase; echo ""
+      fi
+
+      _ssh_cfg_gen_key "$key_path" "$key_type" "$passphrase"
+      echo -e "      ${C_GREEN}✓ 密钥已生成: ${key_path}${C_RESET}\n"
+      echo -e "      ${C_CYAN}公钥内容（请复制到目标服务器 ~/.ssh/authorized_keys）：${C_RESET}"
+      cat "${key_path}.pub"
+      echo ""
+      ;;
+    2)
+      read -rp "      请输入私钥文件路径: " key_path
+      key_path="${key_path:-$default_key_path}"
+      # 展开 ~ 符号
+      key_path="${key_path/#\~/$HOME}"
+      if [[ ! -f "$key_path" ]]; then
+        echo -e "      ${C_RED}✗ 文件不存在: ${key_path}${C_RESET}"; return 1
+      fi
+      ;;
+    3)
+      read -rp "      保存路径 [默认 ${default_key_path}]: " key_path
+      key_path="${key_path:-$default_key_path}"
+
+      echo "      请粘贴私钥内容（以单独的空行结束输入）："
+      local privkey_lines="" line
+      while IFS= read -r line; do
+        [[ -z "$line" ]] && break
+        privkey_lines+="${line}"$'\n'
+      done
+      privkey_lines="${privkey_lines%$'\n'}"
+
+      echo "      请粘贴公钥内容（单行，以 ssh-* 开头）："
+      local pubkey_line
+      read -r pubkey_line
+
+      _ssh_cfg_import_key "$key_path" "$privkey_lines" "$pubkey_line"
+      echo -e "      ${C_GREEN}✓ 密钥已保存: ${key_path}${C_RESET}"
+      ;;
+    *)
+      echo -e "      ${C_RED}✗ 无效选项${C_RESET}"; return 1
+      ;;
+  esac
+
+  _ssh_cfg_write_block "$config_file" "$host" "$hostname" "$user" "$port" "$key_path" "$use_proxy"
+  echo -e "\n      ${C_GREEN}✓ Host \"${host}\" 已写入 ${config_file}${C_RESET}\n"
+}
+
+# 交互式删除一个 Host 条目
+# 参数：config_file
+_ssh_cfg_do_delete() {
+  local config_file="$1"
+
+  echo -e "\n${C_BOLD_WHITE}━━━━━━━━━━ 删除 Host ━━━━━━━━━━${C_RESET}\n"
+
+  local host
+  read -rp "      [1/2] 请输入要删除的 Host 别名: " host
+  [[ -z "$host" ]] && { echo "      已取消"; return 0; }
+
+  if ! _ssh_cfg_host_exists "$config_file" "$host"; then
+    echo -e "      ${C_YELLOW}⚠ Host \"${host}\" 不存在${C_RESET}"; return 0
+  fi
+
+  local confirm
+  read -rp "      [2/2] 确认删除 Host \"${host}\"？[y/N]: " confirm
+  if [[ "$confirm" =~ ^[Yy]$ ]]; then
+    _ssh_cfg_remove_host "$config_file" "$host"
+    echo -e "      ${C_GREEN}✓ 已删除 Host \"${host}\"${C_RESET}\n"
+  else
+    echo "      已取消"
+  fi
+}
+
+do_ssh_config() {
+  local config_file="$HOME/.ssh/config"
+
+  while true; do
+    echo ""
+    echo -e "${C_CYAN}━━━━━━━━━━ SSH 客户端配置管理 ━━━━━━━━━━${C_RESET}"
+    echo " 1) 列出所有 Host"
+    echo " 2) 添加 / 更新 Host"
+    echo " 3) 删除 Host"
+    echo " 0) 返回主菜单"
+    echo -e "${C_CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    local sub
+    read -rp "请输入选项 [0-3]: " sub
+    echo ""
+    case "$sub" in
+      1) _ssh_cfg_list "$config_file" ;;
+      2) _ssh_cfg_do_add    "$config_file" || true ;;
+      3) _ssh_cfg_do_delete "$config_file" || true ;;
+      0) return 0 ;;
+      *) echo "无效选项，请重新输入" ;;
+    esac
+  done
+}
+
 # ============================================================
 #  主菜单
 # ============================================================
