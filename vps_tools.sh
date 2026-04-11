@@ -2838,6 +2838,45 @@ _ssh_cfg_list() {
   echo "共 $((i-1)) 条配置"
 }
 
+# 生成 SSH 密钥对
+# 参数：key_path key_type(ed25519|rsa|ecdsa) passphrase(空字符串=无密码)
+_ssh_cfg_gen_key() {
+  local key_path="$1"
+  local key_type="$2"
+  local passphrase="$3"
+
+  local key_dir
+  key_dir="$(dirname "$key_path")"
+  mkdir -p "$key_dir"
+  chmod 700 "$key_dir"
+
+  case "$key_type" in
+    ed25519) ssh-keygen -q -t ed25519      -f "$key_path" -N "$passphrase" -C "" ;;
+    rsa)     ssh-keygen -q -t rsa -b 4096  -f "$key_path" -N "$passphrase" -C "" ;;
+    ecdsa)   ssh-keygen -q -t ecdsa -b 521 -f "$key_path" -N "$passphrase" -C "" ;;
+    *)       echo -e "      ${C_RED}✗ 未知密钥类型: ${key_type}${C_RESET}" >&2; return 1 ;;
+  esac
+}
+
+# 将用户粘贴的密钥内容保存到文件（自动设置权限）
+# 参数：key_path privkey_content pubkey_content
+_ssh_cfg_import_key() {
+  local key_path="$1"
+  local privkey_content="$2"
+  local pubkey_content="$3"
+
+  local key_dir
+  key_dir="$(dirname "$key_path")"
+  mkdir -p "$key_dir"
+  chmod 700 "$key_dir"
+
+  printf '%s\n' "$privkey_content" > "$key_path"
+  chmod 600 "$key_path"
+
+  printf '%s\n' "$pubkey_content" > "${key_path}.pub"
+  chmod 644 "${key_path}.pub"
+}
+
 # 从 config 文件中删除指定 Host 块（操作前自动备份）
 # 参数：config_file host
 _ssh_cfg_remove_host() {

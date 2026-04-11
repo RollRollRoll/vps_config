@@ -165,3 +165,48 @@ assert_not_contains "unmanaged" "$list_out" "list ignores blocks without Identit
 assert_contains "共 2 条配置"   "$list_out" "list count unchanged after unmanaged block"
 
 printf 'ssh_cfg_list checks passed\n'
+
+# ── _ssh_cfg_gen_key 测试 ────────────────────────────────────
+keydir="${TMPDIR_TEST}/keys"
+mkdir -p "$keydir"
+
+_ssh_cfg_gen_key "${keydir}/test_ed25519" "ed25519" ""
+[[ -f "${keydir}/test_ed25519" ]]     || { printf 'FAIL: ed25519 private key not created\n' >&2; exit 1; }
+[[ -f "${keydir}/test_ed25519.pub" ]] || { printf 'FAIL: ed25519 public key not created\n'  >&2; exit 1; }
+perm="$(stat -c '%a' "${keydir}/test_ed25519")"
+[[ "$perm" == "600" ]] || { printf 'FAIL: private key perms should be 600, got %s\n' "$perm" >&2; exit 1; }
+printf 'PASS: _ssh_cfg_gen_key ed25519 creates key pair with 600 permissions\n'
+
+_ssh_cfg_gen_key "${keydir}/test_rsa" "rsa" ""
+[[ -f "${keydir}/test_rsa" ]] || { printf 'FAIL: rsa private key not created\n' >&2; exit 1; }
+printf 'PASS: _ssh_cfg_gen_key rsa creates key files\n'
+
+_ssh_cfg_gen_key "${keydir}/test_ecdsa" "ecdsa" ""
+[[ -f "${keydir}/test_ecdsa" ]] || { printf 'FAIL: ecdsa private key not created\n' >&2; exit 1; }
+printf 'PASS: _ssh_cfg_gen_key ecdsa creates key files\n'
+
+assert_fail _ssh_cfg_gen_key "${keydir}/bad" "invalid_type" ""
+
+printf 'ssh_cfg_gen_key checks passed\n'
+
+# ── _ssh_cfg_import_key 测试 ─────────────────────────────────
+priv='-----BEGIN OPENSSH PRIVATE KEY-----
+dummyprivkeydata
+-----END OPENSSH PRIVATE KEY-----'
+pub='ssh-ed25519 AAAAB3NzaC1yc2EAAAADAQABAAAA dummy@test'
+
+_ssh_cfg_import_key "${keydir}/imported" "$priv" "$pub"
+
+[[ -f "${keydir}/imported" ]]     || { printf 'FAIL: imported private key file not created\n' >&2; exit 1; }
+[[ -f "${keydir}/imported.pub" ]] || { printf 'FAIL: imported public key file not created\n'  >&2; exit 1; }
+
+priv_perm="$(stat -c '%a' "${keydir}/imported")"
+pub_perm="$(stat -c '%a'  "${keydir}/imported.pub")"
+[[ "$priv_perm" == "600" ]] || { printf 'FAIL: private key perms %s (expected 600)\n' "$priv_perm" >&2; exit 1; }
+[[ "$pub_perm"  == "644" ]] || { printf 'FAIL: public key perms %s (expected 644)\n'  "$pub_perm"  >&2; exit 1; }
+
+grep -q "dummyprivkeydata"  "${keydir}/imported"     || { printf 'FAIL: private key content mismatch\n' >&2; exit 1; }
+grep -q "AAAAB3NzaC1yc2E"  "${keydir}/imported.pub" || { printf 'FAIL: public key content mismatch\n'  >&2; exit 1; }
+printf 'PASS: _ssh_cfg_import_key saves files with correct permissions and content\n'
+
+printf 'ssh_cfg_import_key checks passed\n'
