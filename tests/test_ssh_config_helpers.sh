@@ -131,3 +131,37 @@ _ssh_cfg_remove_host "$tmpconf3" "nonexistent"
 printf 'PASS: remove nonexistent host is no-op\n'
 
 printf 'ssh_cfg_remove_host checks passed\n'
+
+# ── _ssh_cfg_list 测试 ───────────────────────────────────────
+tmpconf4="${TMPDIR_TEST}/config4"
+touch "$tmpconf4"
+
+# 空文件显示暂无配置
+list_out="$(_ssh_cfg_list "$tmpconf4")"
+assert_contains "暂无配置" "$list_out" "list empty config"
+
+# 写入两个 Host 块（一个启用代理，一个不启用）
+_ssh_cfg_write_block "$tmpconf4" "vps1" "1.1.1.1" "root"   "2222" "~/.ssh/vps1" "1"
+_ssh_cfg_write_block "$tmpconf4" "vps2" "2.2.2.2" "ubuntu" "22"   "~/.ssh/vps2" "0"
+
+list_out="$(_ssh_cfg_list "$tmpconf4")"
+assert_contains "vps1"        "$list_out" "list shows vps1"
+assert_contains "1.1.1.1"     "$list_out" "list shows HostName of vps1"
+assert_contains "✓"           "$list_out" "list shows proxy mark"
+assert_contains "vps2"        "$list_out" "list shows vps2"
+assert_contains "✗"           "$list_out" "list shows no-proxy mark"
+assert_contains "共 2 条配置" "$list_out" "list shows count"
+
+# 不含 IdentitiesOnly yes 的普通 Host 块不应出现在列表中
+cat >> "$tmpconf4" <<'EOF'
+
+Host unmanaged
+    HostName 9.9.9.9
+    User root
+    Port 22
+EOF
+list_out="$(_ssh_cfg_list "$tmpconf4")"
+assert_not_contains "unmanaged" "$list_out" "list ignores blocks without IdentitiesOnly yes"
+assert_contains "共 2 条配置"   "$list_out" "list count unchanged after unmanaged block"
+
+printf 'ssh_cfg_list checks passed\n'

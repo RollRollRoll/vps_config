@@ -2786,6 +2786,58 @@ _ssh_cfg_write_block() {
   } >> "$config_file"
 }
 
+# 读取 config 文件，以表格形式展示所有受管 Host（含 IdentitiesOnly yes 的块）
+# 参数：config_file
+_ssh_cfg_list() {
+  local config_file="${1:-$HOME/.ssh/config}"
+
+  if [[ ! -f "$config_file" ]] || [[ ! -s "$config_file" ]]; then
+    echo "      暂无配置"
+    return 0
+  fi
+
+  local rows
+  rows=$(awk '
+    /^Host[[:space:]]/ {
+      if (cur != "" && identonly) {
+        px = has_proxy ? "✓" : "✗"
+        print cur "|" cur_hn "|" cur_user "|" cur_port "|" px
+      }
+      cur=$2; cur_hn="-"; cur_user="-"; cur_port="-"; identonly=0; has_proxy=0
+      next
+    }
+    /^[[:space:]]*HostName[[:space:]]/           { cur_hn=$2 }
+    /^[[:space:]]*User[[:space:]]/               { cur_user=$2 }
+    /^[[:space:]]*Port[[:space:]]/               { cur_port=$2 }
+    /^[[:space:]]*IdentitiesOnly[[:space:]]+yes/ { identonly=1 }
+    /^[[:space:]]*ProxyCommand[[:space:]]/       { has_proxy=1 }
+    END {
+      if (cur != "" && identonly) {
+        px = has_proxy ? "✓" : "✗"
+        print cur "|" cur_hn "|" cur_user "|" cur_port "|" px
+      }
+    }
+  ' "$config_file")
+
+  if [[ -z "$rows" ]]; then
+    echo "      暂无配置"
+    return 0
+  fi
+
+  echo ""
+  printf ' %-3s │ %-15s │ %-20s │ %-6s │ %-6s │ %s\n' "#" "Host 别名" "HostName" "User" "Port" "代理"
+  echo "────┼─────────────────┼──────────────────────┼────────┼────────┼─────"
+
+  local i=1
+  while IFS='|' read -r h hn u p px; do
+    printf ' %-3s │ %-15s │ %-20s │ %-6s │ %-6s │ %s\n' "$i" "$h" "$hn" "$u" "$p" "$px"
+    (( i++ )) || true
+  done <<< "$rows"
+
+  echo ""
+  echo "共 $((i-1)) 条配置"
+}
+
 # 从 config 文件中删除指定 Host 块（操作前自动备份）
 # 参数：config_file host
 _ssh_cfg_remove_host() {
