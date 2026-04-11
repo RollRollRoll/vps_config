@@ -48,7 +48,7 @@ grep -q 'systemctl restart xrdp' ./vps_tools.sh
 printf 'desktop flow static checks passed\n'
 
 grep -q '11) 安装桌面环境与远程桌面' ./vps_tools.sh
-grep -q '请输入选项 \[0-11\]' ./vps_tools.sh
+grep -q '请输入选项 \[0-12\]' ./vps_tools.sh
 grep -q '11) require_root && do_desktop_remote_setup || true ;;' ./vps_tools.sh
 grep -q '11. 桌面环境与远程桌面安装' ./README.md
 grep -q '仅支持 `Ubuntu / Debian`' ./README.md

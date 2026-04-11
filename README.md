@@ -22,6 +22,7 @@
 9. Cloudflare 测速
 10. 清理备份文件
 11. 桌面环境与远程桌面安装
+12. SSH 客户端配置管理
 
 其中大多数功能需要 `root` 权限，测速和部分只读检测功能可在普通用户下执行，
 但为了减少权限相关的中断，建议使用 `sudo` 或 `root` 用户运行整个脚本。
@@ -148,6 +149,16 @@ Cloudflare 的链路表现。
 - 启用并重启 `xrdp`
 
 当前实现仅支持 `Ubuntu / Debian`，且要求系统使用 `systemd`。
+
+### 12. SSH 客户端配置管理
+
+管理本机 `~/.ssh/config` 中的远端服务器连接条目，无需 `root` 权限。子菜单提供：
+
+- **列出**所有由本工具管理的 Host（含 `IdentitiesOnly yes` 的条目）
+- **添加 / 更新** Host：配置 HostName、User、Port，可选启用 SOCKS5 代理
+  （`ProxyCommand nc -X 5 -x 127.0.0.1:6153`）；IdentityFile 支持三种方式：
+  生成新密钥对（ed25519 / rsa-4096 / ecdsa-521）、提供已有私钥路径、粘贴私钥和公钥内容
+- **删除** Host：精确匹配别名，操作前自动备份 `~/.ssh/config`
 
 ## 注意事项
 

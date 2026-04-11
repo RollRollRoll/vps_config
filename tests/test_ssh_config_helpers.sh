@@ -210,3 +210,15 @@ grep -q "AAAAB3NzaC1yc2E"  "${keydir}/imported.pub" || { printf 'FAIL: public ke
 printf 'PASS: _ssh_cfg_import_key saves files with correct permissions and content\n'
 
 printf 'ssh_cfg_import_key checks passed\n'
+
+# ── 静态集成检查 ─────────────────────────────────────────────
+grep -q 'do_ssh_config()'      ./vps_tools.sh || { printf 'FAIL: do_ssh_config() not found\n' >&2; exit 1; }
+grep -q '_ssh_cfg_do_add()'    ./vps_tools.sh || { printf 'FAIL: _ssh_cfg_do_add() not found\n' >&2; exit 1; }
+grep -q '_ssh_cfg_do_delete()' ./vps_tools.sh || { printf 'FAIL: _ssh_cfg_do_delete() not found\n' >&2; exit 1; }
+grep -q '12) SSH 客户端配置管理' ./vps_tools.sh || { printf 'FAIL: menu item 12 not found\n' >&2; exit 1; }
+grep -q '12) do_ssh_config || true ;;' ./vps_tools.sh || { printf 'FAIL: case 12 not found\n' >&2; exit 1; }
+grep -q '请输入选项 \[0-12\]' ./vps_tools.sh || { printf 'FAIL: prompt range not updated\n' >&2; exit 1; }
+printf 'menu integration static checks passed\n'
+
+grep -q '12. SSH 客户端配置管理' ./README.md || { printf 'FAIL: README item 12 not found\n' >&2; exit 1; }
+printf 'README check passed\n'

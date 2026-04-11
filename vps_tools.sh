@@ -3089,6 +3089,7 @@ show_menu() {
   echo " 9) Cloudflare 测速"
   echo " 10) 清理备份文件"
   echo " 11) 安装桌面环境与远程桌面"
+  echo " 12) SSH 客户端配置管理"
   echo " 0) 退出"
   echo -e "${C_CYAN}=========================================${C_RESET}"
 }
@@ -3096,7 +3097,7 @@ show_menu() {
 main() {
   while true; do
     show_menu
-    read -rp "请输入选项 [0-11]: " choice
+    read -rp "请输入选项 [0-12]: " choice
     echo ""
     case "$choice" in
       1) require_root && do_ssh_harden || true ;;
@@ -3110,6 +3111,7 @@ main() {
       9) do_speedtest || true ;;
       10) require_root && do_cleanup_backups || true ;;
       11) require_root && do_desktop_remote_setup || true ;;
+      12) do_ssh_config || true ;;
       0) echo "再见！"; exit 0 ;;
       *) echo "无效选项，请重新输入" ;;
     esac
