@@ -3071,6 +3071,60 @@ do_ssh_config() {
 }
 
 # ============================================================
+#  13) 安装 Mosh 和 tmux
+# ============================================================
+do_mosh_tmux_install() {
+  echo -e "${C_CYAN}=== 安装 Mosh 和 tmux ===${C_RESET}"
+  echo ""
+
+  # 检测包管理器
+  local pkg_mgr=""
+  if command -v apt-get &>/dev/null; then
+    pkg_mgr="apt"
+  elif command -v dnf &>/dev/null; then
+    pkg_mgr="dnf"
+  elif command -v yum &>/dev/null; then
+    pkg_mgr="yum"
+  else
+    echo -e "${C_RED}未检测到支持的包管理器（apt/dnf/yum），无法自动安装${C_RESET}"
+    return 1
+  fi
+
+  # 安装 Mosh
+  echo -e "${C_CYAN}正在安装 Mosh...${C_RESET}"
+  case "$pkg_mgr" in
+    apt) apt-get update -qq && apt-get install -y mosh ;;
+    dnf) dnf install -y mosh ;;
+    yum) yum install -y mosh ;;
+  esac
+  if command -v mosh &>/dev/null; then
+    echo -e "${C_GREEN}✔ Mosh 安装成功：$(mosh --version 2>&1 | head -1)${C_RESET}"
+  else
+    echo -e "${C_RED}✘ Mosh 安装失败，请检查包源或手动安装${C_RESET}"
+  fi
+
+  echo ""
+
+  # 安装 tmux
+  echo -e "${C_CYAN}正在安装 tmux...${C_RESET}"
+  case "$pkg_mgr" in
+    apt) apt-get install -y tmux ;;
+    dnf) dnf install -y tmux ;;
+    yum) yum install -y tmux ;;
+  esac
+  if command -v tmux &>/dev/null; then
+    echo -e "${C_GREEN}✔ tmux 安装成功：$(tmux -V)${C_RESET}"
+  else
+    echo -e "${C_RED}✘ tmux 安装失败，请检查包源或手动安装${C_RESET}"
+  fi
+
+  echo ""
+  echo -e "${C_CYAN}提示：Mosh 使用 UDP 60000-61000 端口，如启用了防火墙请放行该范围${C_RESET}"
+  echo -e "${C_CYAN}      mosh user@host        # 连接远程服务器${C_RESET}"
+  echo -e "${C_CYAN}      tmux new -s main      # 创建新会话${C_RESET}"
+}
+
+# ============================================================
 #  主菜单
 # ============================================================
 show_menu() {
@@ -3090,6 +3144,7 @@ show_menu() {
   echo " 10) 清理备份文件"
   echo " 11) 安装桌面环境与远程桌面"
   echo " 12) SSH 客户端配置管理"
+  echo " 13) 安装 Mosh 和 tmux"
   echo " 0) 退出"
   echo -e "${C_CYAN}=========================================${C_RESET}"
 }
@@ -3097,7 +3152,7 @@ show_menu() {
 main() {
   while true; do
     show_menu
-    read -rp "请输入选项 [0-12]: " choice
+    read -rp "请输入选项 [0-13]: " choice
     echo ""
     case "$choice" in
       1) require_root && do_ssh_harden || true ;;
@@ -3112,6 +3167,7 @@ main() {
       10) require_root && do_cleanup_backups || true ;;
       11) require_root && do_desktop_remote_setup || true ;;
       12) do_ssh_config || true ;;
+      13) require_root && do_mosh_tmux_install || true ;;
       0) echo "再见！"; exit 0 ;;
       *) echo "无效选项，请重新输入" ;;
     esac
